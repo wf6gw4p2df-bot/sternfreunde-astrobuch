@@ -87,13 +87,30 @@ def upload_bytes_to_drive(filename, data, mimetype):
         "parents": [drive_folder_id()],
     }
 
-    uploaded = service.files().create(
-        body=metadata,
-        media_body=media,
-        fields="id,name",
-    ).execute()
+    try:
+        uploaded = service.files().create(
+            body=metadata,
+            media_body=media,
+            fields="id,name",
+        ).execute()
 
-    return uploaded
+        return uploaded
+
+    except Exception as e:
+        st.error("Google-Drive-Upload fehlgeschlagen.")
+        st.write("Fehlertyp:", type(e))
+
+        if hasattr(e, "status_code"):
+            st.write("Status code:", e.status_code)
+
+        if hasattr(e, "resp"):
+            st.write("HTTP Status:", e.resp.status)
+            st.write("Reason:", e.resp.reason)
+
+        if hasattr(e, "content"):
+            st.code(e.content.decode("utf-8", errors="replace"))
+
+        raise
 
 
 def upload_or_replace_csv(filename, data, mimetype):
