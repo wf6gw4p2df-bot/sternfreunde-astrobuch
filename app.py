@@ -395,6 +395,35 @@ div[data-testid="stForm"] {
     color: #111827 !important;
     border-radius: 12px !important;
 }
+
+/* Dropdown Feld (sichtbare Auswahl) */
+.stSelectbox * {
+    color: #111827 !important;
+}
+
+/* Geschlossenes Select-Feld */
+div[data-baseweb="select"] * {
+    color: #111827 !important;
+    background-color: #ffffff !important;
+}
+
+/* Geöffnete Dropdown-Liste */
+div[data-baseweb="popover"] * {
+    color: #111827 !important;
+    background-color: #ffffff !important;
+}
+
+/* Alle Dropdown-Einträge */
+ul[role="listbox"] * {
+    color: #111827 !important;
+    background-color: #ffffff !important;
+}
+
+/* Hover-Effekt in Dropdown */
+ul[role="listbox"] li:hover {
+    background-color: #e5e7eb !important;
+    color: #111827 !important;
+}
 .stTextInput label,
 .stSelectbox label,
 .stFileUploader label {
@@ -472,7 +501,7 @@ st.markdown(
 <div class="info-box">
 <p><strong>Hallo zusammen,</strong></p>
 
-<p>wir wollen ein gemeinsames Astrobuch der Sternenfreunde Münster im Format <b>21 × 21 cm</b> erstellen,
+<p>wir wollen ein gemeinsames Astrobuch der Sternfreunde Münster im Format <b>21 × 21 cm</b> erstellen,
 das die Vielfalt und Schönheit der Astrofotografie unserer Mitglieder zeigt.</p>
 
 <p>Geplant sind beeindruckende Bilder aus unterschiedlichen Bereichen der Astronomie- und Nachtfotografie –
