@@ -97,8 +97,16 @@ def handle_google_callback():
             }
 
             st.query_params.clear()
-            st.success("Google Drive verbunden.")
-            st.rerun()
+
+            st.success("Google Drive verbunden. Kopiere diesen Block in Streamlit Secrets:")
+            st.code(
+                f'''
+[gdrive_token]
+refresh_token = "{flow.credentials.refresh_token}"
+''',
+                language="toml",
+            )
+            st.stop()
 
         except Exception as e:
             st.query_params.clear()
@@ -116,26 +124,30 @@ def require_google_login():
             prompt="consent",
         )
 
-        st.warning("Bitte zuerst mit Google Drive verbinden.")
+        st.warning("Bitte zuerst einmalig als Admin mit Google Drive verbinden.")
         st.markdown(f"[🔐 Mit Google Drive verbinden]({auth_url})")
         st.stop()
 
 
 def get_drive_service():
+    if "gdrive_token" in st.secrets:
+        creds = Credentials(
+            token=None,
+            refresh_token=st.secrets["gdrive_token"]["refresh_token"],
+            token_uri="https://oauth2.googleapis.com/token",
+            client_id=st.secrets["gdrive"]["client_id"],
+            client_secret=st.secrets["gdrive"]["client_secret"],
+            scopes=SCOPES,
+        )
+        creds.refresh(Request())
+        return build("drive", "v3", credentials=creds)
+
     require_google_login()
 
     creds = Credentials(**st.session_state["google_token"])
 
     if creds.expired and creds.refresh_token:
         creds.refresh(Request())
-        st.session_state["google_token"] = {
-            "token": creds.token,
-            "refresh_token": creds.refresh_token,
-            "token_uri": creds.token_uri,
-            "client_id": creds.client_id,
-            "client_secret": creds.client_secret,
-            "scopes": creds.scopes,
-        }
 
     return build("drive", "v3", credentials=creds)
 
