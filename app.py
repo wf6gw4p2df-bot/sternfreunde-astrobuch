@@ -7,7 +7,9 @@ import re
 import html
 import io
 
-from google.oauth2 import service_account
+from google_auth_oauthlib.flow import Flow
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
 
@@ -46,20 +48,80 @@ COLUMNS = [
     "Bilddatei",
 ]
 
-SCOPES = ["https://www.googleapis.com/auth/drive"]
-
-
-@st.cache_resource
-def get_drive_service():
-    creds = service_account.Credentials.from_service_account_info(
-        dict(st.secrets["gdrive"]),
-        scopes=SCOPES,
-    )
-    return build("drive", "v3", credentials=creds)
+SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 
 
 def drive_folder_id():
     return st.secrets["gdrive"]["drive_folder_id"]
+
+
+def get_google_flow():
+    return Flow.from_client_config(
+        {
+            "web": {
+                "client_id": st.secrets["gdrive"]["client_id"],
+                "client_secret": st.secrets["gdrive"]["client_secret"],
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "redirect_uris": [st.secrets["gdrive"]["redirect_uri"]],
+            }
+        },
+        scopes=SCOPES,
+        redirect_uri=st.secrets["gdrive"]["redirect_uri"],
+    )
+
+
+def handle_google_callback():
+    query_params = st.query_params
+
+    if "code" in query_params and "google_token" not in st.session_state:
+        flow = get_google_flow()
+        flow.fetch_token(code=query_params["code"])
+
+        st.session_state["google_token"] = {
+            "token": flow.credentials.token,
+            "refresh_token": flow.credentials.refresh_token,
+            "token_uri": flow.credentials.token_uri,
+            "client_id": flow.credentials.client_id,
+            "client_secret": flow.credentials.client_secret,
+            "scopes": flow.credentials.scopes,
+        }
+
+        st.query_params.clear()
+        st.rerun()
+
+
+def require_google_login():
+    if "google_token" not in st.session_state:
+        flow = get_google_flow()
+        auth_url, _ = flow.authorization_url(
+            access_type="offline",
+            include_granted_scopes="true",
+            prompt="consent",
+        )
+
+        st.warning("Bitte zuerst mit Google Drive verbinden.")
+        st.markdown(f"[🔐 Mit Google Drive verbinden]({auth_url})")
+        st.stop()
+
+
+def get_drive_service():
+    require_google_login()
+
+    creds = Credentials(**st.session_state["google_token"])
+
+    if creds.expired and creds.refresh_token:
+        creds.refresh(Request())
+        st.session_state["google_token"] = {
+            "token": creds.token,
+            "refresh_token": creds.refresh_token,
+            "token_uri": creds.token_uri,
+            "client_id": creds.client_id,
+            "client_secret": creds.client_secret,
+            "scopes": creds.scopes,
+        }
+
+    return build("drive", "v3", credentials=creds)
 
 
 def find_drive_file(filename):
@@ -87,30 +149,13 @@ def upload_bytes_to_drive(filename, data, mimetype):
         "parents": [drive_folder_id()],
     }
 
-    try:
-        uploaded = service.files().create(
-            body=metadata,
-            media_body=media,
-            fields="id,name",
-        ).execute()
+    uploaded = service.files().create(
+        body=metadata,
+        media_body=media,
+        fields="id,name",
+    ).execute()
 
-        return uploaded
-
-    except Exception as e:
-        st.error("Google-Drive-Upload fehlgeschlagen.")
-        st.write("Fehlertyp:", type(e))
-
-        if hasattr(e, "status_code"):
-            st.write("Status code:", e.status_code)
-
-        if hasattr(e, "resp"):
-            st.write("HTTP Status:", e.resp.status)
-            st.write("Reason:", e.resp.reason)
-
-        if hasattr(e, "content"):
-            st.code(e.content.decode("utf-8", errors="replace"))
-
-        raise
+    return uploaded
 
 
 def upload_or_replace_csv(filename, data, mimetype):
@@ -190,11 +235,7 @@ def load_data():
 
 def save_data(df):
     csv_bytes = df.to_csv(index=False).encode("utf-8-sig")
-    upload_or_replace_csv(
-        "beitraege.csv",
-        csv_bytes,
-        "text/csv",
-    )
+    upload_or_replace_csv("beitraege.csv", csv_bytes, "text/csv")
 
 
 def save_upload(uploaded_file):
@@ -260,6 +301,9 @@ def get_edit_defaults(df_all):
         "kategorie": str(row.get("Kategorie", KATEGORIEN[0])),
         "bilddatei": str(row.get("Bilddatei", "")),
     }
+
+
+handle_google_callback()
 
 
 st.markdown(
