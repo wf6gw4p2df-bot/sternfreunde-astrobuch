@@ -74,21 +74,36 @@ def get_google_flow():
 def handle_google_callback():
     query_params = st.query_params
 
-    if "code" in query_params and "google_token" not in st.session_state:
-        flow = get_google_flow()
-        flow.fetch_token(code=query_params["code"])
-
-        st.session_state["google_token"] = {
-            "token": flow.credentials.token,
-            "refresh_token": flow.credentials.refresh_token,
-            "token_uri": flow.credentials.token_uri,
-            "client_id": flow.credentials.client_id,
-            "client_secret": flow.credentials.client_secret,
-            "scopes": flow.credentials.scopes,
-        }
-
+    if "error" in query_params:
+        st.error(f"Google Login fehlgeschlagen: {query_params['error']}")
         st.query_params.clear()
-        st.rerun()
+        st.stop()
+
+    if "code" in query_params:
+        code = query_params["code"]
+
+        try:
+            flow = get_google_flow()
+            flow.fetch_token(code=code)
+
+            st.session_state["google_token"] = {
+                "token": flow.credentials.token,
+                "refresh_token": flow.credentials.refresh_token,
+                "token_uri": flow.credentials.token_uri,
+                "client_id": flow.credentials.client_id,
+                "client_secret": flow.credentials.client_secret,
+                "scopes": flow.credentials.scopes,
+            }
+
+            st.query_params.clear()
+            st.success("Google Drive verbunden.")
+            st.rerun()
+
+        except Exception as e:
+            st.query_params.clear()
+            st.error("Google-Code konnte nicht eingelöst werden. Bitte erneut verbinden.")
+            st.exception(e)
+            st.stop()
 
 
 def require_google_login():
@@ -205,6 +220,7 @@ def download_drive_file(file_id):
 def delete_drive_file(file_id):
     if not file_id:
         return
+
     try:
         service = get_drive_service()
         service.files().delete(fileId=file_id).execute()
