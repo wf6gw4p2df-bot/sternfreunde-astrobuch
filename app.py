@@ -68,6 +68,7 @@ def get_google_flow():
         },
         scopes=SCOPES,
         redirect_uri=st.secrets["gdrive"]["redirect_uri"],
+        autogenerate_code_verifier=False,
     )
 
 
