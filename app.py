@@ -5,6 +5,12 @@ from datetime import datetime
 import uuid
 import re
 import html
+import io
+
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
+
 
 # ------------------------------------------------------------
 # Grundkonfiguration
@@ -15,15 +21,8 @@ st.set_page_config(
     layout="wide",
 )
 
-DATA_DIR = Path("data")
-UPLOAD_DIR = DATA_DIR / "uploads"
-CSV_FILE = DATA_DIR / "beitraege.csv"
-
 MAX_UPLOAD_MB = 10
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
-
-DATA_DIR.mkdir(exist_ok=True)
-UPLOAD_DIR.mkdir(exist_ok=True)
 
 KATEGORIEN = [
     "Deep Sky",
@@ -50,6 +49,89 @@ COLUMNS = [
     "Bilddatei",
 ]
 
+SCOPES = ["https://www.googleapis.com/auth/drive"]
+
+
+# ------------------------------------------------------------
+# Google Drive
+# ------------------------------------------------------------
+@st.cache_resource
+def get_drive_service():
+    creds = service_account.Credentials.from_service_account_info(
+        dict(st.secrets["gdrive"]),
+        scopes=SCOPES,
+    )
+    return build("drive", "v3", credentials=creds)
+
+
+def drive_folder_id():
+    return st.secrets["gdrive"]["drive_folder_id"]
+
+
+def find_drive_file(filename):
+    service = get_drive_service()
+    query = (
+        f"name='{filename}' and "
+        f"'{drive_folder_id()}' in parents and trashed=false"
+    )
+    result = service.files().list(q=query, fields="files(id, name)").execute()
+    files = result.get("files", [])
+    return files[0] if files else None
+
+
+def upload_bytes_to_drive(filename, data, mimetype):
+    service = get_drive_service()
+    existing = find_drive_file(filename)
+
+    media = MediaIoBaseUpload(
+        io.BytesIO(data),
+        mimetype=mimetype,
+        resumable=True,
+    )
+
+    if existing:
+        uploaded = service.files().update(
+            fileId=existing["id"],
+            media_body=media,
+            fields="id,name",
+        ).execute()
+    else:
+        metadata = {
+            "name": filename,
+            "parents": [drive_folder_id()],
+        }
+        uploaded = service.files().create(
+            body=metadata,
+            media_body=media,
+            fields="id,name",
+        ).execute()
+
+    return uploaded
+
+
+def download_drive_file(file_id):
+    service = get_drive_service()
+    request = service.files().get_media(fileId=file_id)
+    buffer = io.BytesIO()
+    downloader = MediaIoBaseDownload(buffer, request)
+
+    done = False
+    while not done:
+        _, done = downloader.next_chunk()
+
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
+def delete_drive_file(file_id: str) -> None:
+    if not file_id:
+        return
+    try:
+        service = get_drive_service()
+        service.files().delete(fileId=file_id).execute()
+    except Exception:
+        pass
+
 
 # ------------------------------------------------------------
 # Hilfsfunktionen
@@ -62,35 +144,40 @@ def safe_filename(filename: str) -> str:
 
 
 def load_data() -> pd.DataFrame:
-    if CSV_FILE.exists():
-        df = pd.read_csv(CSV_FILE)
+    csv_file = find_drive_file("beitraege.csv")
+
+    if csv_file:
+        data = download_drive_file(csv_file["id"])
+        df = pd.read_csv(io.BytesIO(data))
         for col in COLUMNS:
             if col not in df.columns:
                 df[col] = ""
         return df[COLUMNS]
+
     return pd.DataFrame(columns=COLUMNS)
 
 
 def save_data(df: pd.DataFrame) -> None:
-    df.to_csv(CSV_FILE, index=False)
+    csv_bytes = df.to_csv(index=False).encode("utf-8-sig")
+    upload_bytes_to_drive(
+        "beitraege.csv",
+        csv_bytes,
+        "text/csv",
+    )
 
 
 def save_upload(uploaded_file) -> str:
     filename = safe_filename(uploaded_file.name)
-    path = UPLOAD_DIR / filename
-    with open(path, "wb") as f:
-        f.write(uploaded_file.getbuffer())
-    return str(path)
+    uploaded = upload_bytes_to_drive(
+        filename,
+        uploaded_file.getvalue(),
+        uploaded_file.type or "application/octet-stream",
+    )
+    return uploaded["id"]
 
 
-def delete_image_file(img_path: str) -> None:
-    if img_path:
-        path = Path(str(img_path))
-        if path.exists():
-            try:
-                path.unlink()
-            except OSError:
-                pass
+def delete_image_file(img_id: str) -> None:
+    delete_drive_file(img_id)
 
 
 def delete_entry(original_index: int) -> None:
@@ -108,9 +195,7 @@ def csv_without_images(df_all: pd.DataFrame) -> bytes:
     export_df = df_all.copy()
 
     if "Bilddatei" in export_df.columns:
-        export_df["Bilddateiname"] = export_df["Bilddatei"].apply(
-            lambda p: Path(str(p)).name if pd.notna(p) and str(p).strip() else ""
-        )
+        export_df["Bilddatei_ID"] = export_df["Bilddatei"]
         export_df = export_df.drop(columns=["Bilddatei"])
 
     ordered_cols = [
@@ -119,7 +204,7 @@ def csv_without_images(df_all: pd.DataFrame) -> bytes:
         "Deine E-Mail",
         "Name deines Bildes",
         "Kategorie",
-        "Bilddateiname",
+        "Bilddatei_ID",
     ]
     export_df = export_df[[c for c in ordered_cols if c in export_df.columns]]
     return export_df.to_csv(index=False).encode("utf-8-sig")
@@ -269,7 +354,6 @@ ul[role="listbox"] span {
     color: #111827 !important;
 }
 
-/* Streamlit-Hinweis wie "200MB per file..." ausblenden */
 .stFileUploader small {
     display: none !important;
 }
@@ -287,7 +371,6 @@ ul[role="listbox"] span {
     color: #111827 !important;
 }
 
-/* Hauptbuttons: Formular speichern und CSV herunterladen */
 div[data-testid="stFormSubmitButton"] button,
 .stDownloadButton > button {
     background: linear-gradient(135deg, #f6d67a, #d4af37 55%, #b8860b) !important;
@@ -321,7 +404,6 @@ div[data-testid="stFormSubmitButton"] button[disabled] {
     opacity: 0.74 !important;
 }
 
-/* normale Aktionsbuttons wie Groß anzeigen, Ändern, Löschen als Textlinks */
 .stButton > button {
     background: transparent !important;
     color: #f6d67a !important;
@@ -505,30 +587,30 @@ with st.form("upload_form", clear_on_submit=(edit_defaults is None)):
                 old_img = str(df_all.loc[edit_defaults["index"], "Bilddatei"])
                 if uploaded is not None:
                     delete_image_file(old_img)
-                    img_path = save_upload(uploaded)
+                    img_id = save_upload(uploaded)
                 else:
-                    img_path = old_img
+                    img_id = old_img
 
                 df_all.loc[edit_defaults["index"], "Zeitpunkt"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 df_all.loc[edit_defaults["index"], "Dein Name"] = name.strip()
                 df_all.loc[edit_defaults["index"], "Deine E-Mail"] = email.strip()
                 df_all.loc[edit_defaults["index"], "Name deines Bildes"] = bildtitel.strip()
                 df_all.loc[edit_defaults["index"], "Kategorie"] = kategorie
-                df_all.loc[edit_defaults["index"], "Bilddatei"] = img_path
+                df_all.loc[edit_defaults["index"], "Bilddatei"] = img_id
                 save_data(df_all)
 
                 st.session_state.pop("edit_index", None)
                 st.success("Änderungen gespeichert.")
                 st.rerun()
             else:
-                img_path = save_upload(uploaded)
+                img_id = save_upload(uploaded)
                 new_row = {
                     "Zeitpunkt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     "Dein Name": name.strip(),
                     "Deine E-Mail": email.strip(),
                     "Name deines Bildes": bildtitel.strip(),
                     "Kategorie": kategorie,
-                    "Bilddatei": img_path,
+                    "Bilddatei": img_id,
                 }
                 df_all = pd.concat([df_all, pd.DataFrame([new_row])], ignore_index=True)
                 save_data(df_all)
@@ -548,7 +630,7 @@ st.divider()
 st.markdown('<div class="gallery-title">Eingereichte Bildvorschläge</div>', unsafe_allow_html=True)
 
 df_all = load_data()
-df = df_all[df_all["Bilddatei"].fillna("").apply(lambda p: Path(str(p)).exists())].copy()
+df = df_all[df_all["Bilddatei"].fillna("").astype(str).str.strip() != ""].copy()
 
 if df.empty:
     st.info("Noch keine Bildvorschläge mit Bild vorhanden.")
@@ -573,13 +655,16 @@ else:
         df = df.sort_values("Zeitpunkt", ascending=False)
 
     for original_index, row in df.iterrows():
-        img_path = str(row["Bilddatei"])
+        img_id = str(row["Bilddatei"])
 
         st.markdown('<div class="card-wide">', unsafe_allow_html=True)
         img_col, text_col = st.columns([1.25, 1.75])
 
         with img_col:
-            st.image(img_path, use_container_width=True)
+            try:
+                st.image(download_drive_file(img_id), use_container_width=True)
+            except Exception:
+                st.warning("Bild konnte nicht geladen werden.")
 
         with text_col:
             st.markdown(
@@ -594,29 +679,27 @@ else:
             action_col_1, action_col_2, action_col_3, _ = st.columns([1, 1, 1, 3])
 
             with action_col_1:
-                if st.button("Groß anzeigen", key=f"open_{original_index}_{img_path}"):
-                    st.session_state["modal_image"] = img_path
+                if st.button("Groß anzeigen", key=f"open_{original_index}_{img_id}"):
+                    st.session_state["modal_image"] = img_id
                     st.session_state["modal_title"] = row["Name deines Bildes"]
 
             with action_col_2:
-                if st.button("Ändern", key=f"edit_{original_index}_{img_path}"):
+                if st.button("Ändern", key=f"edit_{original_index}_{img_id}"):
                     st.session_state["edit_index"] = int(original_index)
                     st.rerun()
 
             with action_col_3:
-                if st.button("Löschen", key=f"delete_{original_index}_{img_path}"):
+                if st.button("Löschen", key=f"delete_{original_index}_{img_id}"):
                     st.session_state["pending_delete"] = int(original_index)
 
             if st.session_state.get("pending_delete") == int(original_index):
-                st.warning(
-                    f"Eintrag „{row['Name deines Bildes']}“ wirklich löschen?"
-                )
+                st.warning(f"Eintrag „{row['Name deines Bildes']}“ wirklich löschen?")
                 confirm_col, cancel_col, _ = st.columns([1.1, 1.1, 3])
 
                 with confirm_col:
                     if st.button("Ja, löschen", key=f"confirm_delete_{original_index}"):
                         delete_entry(int(original_index))
-                        if st.session_state.get("modal_image") == img_path:
+                        if st.session_state.get("modal_image") == img_id:
                             st.session_state.pop("modal_image", None)
                             st.session_state.pop("modal_title", None)
                         if st.session_state.get("edit_index") == int(original_index):
@@ -640,7 +723,10 @@ if "modal_image" in st.session_state:
     if hasattr(st, "dialog"):
         @st.dialog(st.session_state.get("modal_title", "Große Ansicht"), width="large")
         def show_image_dialog():
-            st.image(st.session_state["modal_image"], use_container_width=True)
+            try:
+                st.image(download_drive_file(st.session_state["modal_image"]), use_container_width=True)
+            except Exception:
+                st.warning("Bild konnte nicht geladen werden.")
             if st.button("Schließen", key="close_dialog"):
                 st.session_state.pop("modal_image", None)
                 st.session_state.pop("modal_title", None)
@@ -650,7 +736,10 @@ if "modal_image" in st.session_state:
     else:
         st.divider()
         st.subheader(f"Große Ansicht: {st.session_state.get('modal_title', '')}")
-        st.image(st.session_state["modal_image"], use_container_width=True)
+        try:
+            st.image(download_drive_file(st.session_state["modal_image"]), use_container_width=True)
+        except Exception:
+            st.warning("Bild konnte nicht geladen werden.")
         if st.button("Große Ansicht schließen", key="close_fallback"):
             st.session_state.pop("modal_image", None)
             st.session_state.pop("modal_title", None)
