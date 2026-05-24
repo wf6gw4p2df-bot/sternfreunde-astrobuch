@@ -499,7 +499,7 @@ st.markdown(
 <div class="info-box">
 <p><strong>Hallo zusammen,</strong></p>
 
-<p>wir wollen ein gemeinsames Astrobuch der Sternenfreunde Münster im Format <b>21 × 21 cm</b> erstellen,
+<p>wir wollen ein gemeinsames Astrobuch der Sternfreunde Münster im Format <b>21 × 21 cm</b> erstellen,
 das die Vielfalt und Schönheit der Astrofotografie unserer Mitglieder zeigt.</p>
 
 <p>Geplant sind beeindruckende Bilder aus unterschiedlichen Bereichen der Astronomie- und Nachtfotografie –
