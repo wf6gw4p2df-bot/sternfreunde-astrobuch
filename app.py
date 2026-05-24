@@ -86,27 +86,33 @@ def upload_bytes_to_drive(filename, data, mimetype):
     media = MediaIoBaseUpload(
         io.BytesIO(data),
         mimetype=mimetype,
-        resumable=True,
+        resumable=False,
     )
 
-    if existing:
-        uploaded = service.files().update(
-            fileId=existing["id"],
-            media_body=media,
-            fields="id,name",
-        ).execute()
-    else:
-        metadata = {
-            "name": filename,
-            "parents": [drive_folder_id()],
-        }
-        uploaded = service.files().create(
-            body=metadata,
-            media_body=media,
-            fields="id,name",
-        ).execute()
+    try:
+        if existing:
+            uploaded = service.files().update(
+                fileId=existing["id"],
+                media_body=media,
+                fields="id,name",
+            ).execute()
+        else:
+            metadata = {
+                "name": filename,
+                "parents": [drive_folder_id()],
+            }
+            uploaded = service.files().create(
+                body=metadata,
+                media_body=media,
+                fields="id,name",
+            ).execute()
 
-    return uploaded
+        return uploaded
+
+    except Exception as e:
+        st.error("Google-Drive-Upload fehlgeschlagen.")
+        st.exception(e)
+        raise
 
 
 def download_drive_file(file_id):
