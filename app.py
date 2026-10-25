@@ -7,6 +7,8 @@ import re
 import html
 import io
 
+from PIL import Image
+
 from google_auth_oauthlib.flow import Flow
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
@@ -228,6 +230,22 @@ def download_drive_file(file_id):
 
     buffer.seek(0)
     return buffer.getvalue()
+
+
+def photo_resolution_caption(image_bytes):
+    """Effective resolution for a square full-bleed page, using original pixels."""
+    with Image.open(io.BytesIO(image_bytes)) as image:
+        width, height = image.size
+    dpi = min(width, height) * 25.4 / 216
+    # Compare before rounding: 2551 pixels are just below 300 dpi.
+    if dpi >= 300:
+        status = "🟢 300 dpi erreicht"
+    else:
+        status = "🟠 Unter 300 dpi"
+    return (
+        f"{status} · {dpi:.2f} dpi bei 216 × 216 mm · "
+        f"{width} × {height} Pixel"
+    )
 
 
 def delete_drive_file(file_id):
@@ -642,15 +660,19 @@ else:
     else:
         df = df.sort_values("Zeitpunkt", ascending=False)
 
+    st.caption("Auflösungscheck für eine seitenfüllende Buchseite: 216 × 216 mm einschließlich Beschnitt. Für 300 dpi sind mindestens 2552 × 2552 Pixel nötig. Entscheidend sind die Bildpixel, nicht der gespeicherte DPI-Wert.")
+
     for original_index, row in df.iterrows():
         img_id = str(row["Bilddatei"])
 
         st.markdown('<div class="card-wide">', unsafe_allow_html=True)
         img_col, text_col = st.columns([1.25, 1.75])
 
+        image_bytes = None
         with img_col:
             try:
-                st.image(download_drive_file(img_id), use_container_width=True)
+                image_bytes = download_drive_file(img_id)
+                st.image(image_bytes, use_container_width=True)
             except Exception:
                 st.warning("Bild konnte nicht geladen werden.")
 
@@ -663,6 +685,12 @@ else:
 """,
                 unsafe_allow_html=True,
             )
+
+            if image_bytes is not None:
+                try:
+                    st.caption(photo_resolution_caption(image_bytes))
+                except (OSError, ValueError):
+                    st.caption("Pixelmaße dieser Bilddatei konnten nicht gelesen werden.")
 
             action_col_1, action_col_2, action_col_3, _ = st.columns([1, 1, 1, 3])
 
