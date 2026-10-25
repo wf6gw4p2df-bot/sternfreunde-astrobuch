@@ -240,8 +240,10 @@ def photo_resolution_caption(image_bytes):
     # Compare before rounding: 2551 pixels are just below 300 dpi.
     if dpi >= 300:
         status = "🟢 300 dpi erreicht"
+    elif dpi >= 240:
+        status = "🟠 240 bis unter 300 dpi"
     else:
-        status = "🟠 Unter 300 dpi"
+        status = "🔴 Unter 240 dpi"
     return (
         f"{status} · {dpi:.2f} dpi bei 216 × 216 mm · "
         f"{width} × {height} Pixel"
